@@ -1,37 +1,27 @@
-# filename: Dockerfile
-
-# Stage 1: Build the React frontend
-# We use a node image to build the frontend assets.
-FROM node:18-alpine AS frontend-builder
-WORKDIR /app/text-to-sql-frontend
-COPY ./text-to-sql-frontend/package.json ./
-COPY ./text-to-sql-frontend/package-lock.json ./
-RUN npm install
-COPY ./text-to-sql-frontend/ .
-RUN chmod +x node_modules/.bin/vite
-RUN npm run build
-
-# Stage 2: Build the FastAPI backend and serve the frontend
-# We use a Python image to run the backend and serve the static files.
+# Use the official Python image as a base
 FROM python:3.9-slim
+
+# Set the working directory in the container
 WORKDIR /app
 
-# Copy the Python dependencies and install them
+# Copy the requirements file and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the built frontend assets from the first stage
-COPY --from=frontend-builder /app/text-to-sql-frontend/dist ./static
+# Copy the frontend build files
+COPY static ./static
 
-# Copy the backend code and the database with explicit paths
-# The source path is relative to the build context, and the destination is relative to the WORKDIR
-COPY ./main.py .
-COPY ./generator.py .
-COPY ./metagraph.py .
-COPY ./northwind.db .
+# Copy the database
+COPY northwind.db .
 
-# Expose the port the application will run on
+# Add a diagnostic command to list files and confirm the database exists
+RUN ls -l /app
+
+# Copy the backend code
+COPY main.py .
+
+# Expose the port the app runs on
 EXPOSE 8000
 
-# Command to run the application using Gunicorn and Uvicorn workers
-CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "main:app", "--bind", "0.0.0.0:8000"]
+# Run the application
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

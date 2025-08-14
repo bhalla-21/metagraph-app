@@ -15,10 +15,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the application code into the container
 COPY main.py .
 
-# Copy the static frontend files
-COPY static/ ./static/
+# Copy the frontend files from the correct path
+COPY text-to-sql-frontend/src/ ./static/
 
-# --- NEW LINE ADDED HERE ---
 # Copy the SQLite database file into the container
 COPY northwind.db .
 
@@ -26,5 +25,4 @@ COPY northwind.db .
 EXPOSE 8000
 
 # Command to run the application using Gunicorn
-# This is a robust way to run Python web apps in production
 CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8000", "main:app"]

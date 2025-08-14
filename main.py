@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles # New import for serving static files
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 import sqlite3
 import networkx as nx
@@ -12,6 +12,7 @@ from typing import Dict, List, Any, Tuple
 import requests
 import json
 import re
+import os # New import to check for file existence
 
 # ==============================================================================
 # Part 1: Schema Representation as a Metagraph
@@ -33,7 +34,6 @@ class SchemaMetagraph:
         """
         print("Building schema metagraph...")
         
-        # Add table nodes and column nodes
         try:
             for table_name, table_info in self.schema_dict['tables'].items():
                 self.graph.add_node(table_name, type='table')
@@ -45,7 +45,6 @@ class SchemaMetagraph:
             print("ERROR: self.schema_dict['tables'] is not a dictionary. Check schema introspection logic.")
             raise
 
-        # Add relationship edges (foreign keys)
         for rel in self.schema_dict.get('relationships', []):
             from_node = f"{rel['from_table']}.{rel['from_col']}"
             to_node = f"{rel['to_table']}.{rel['to_col']}"
@@ -68,6 +67,9 @@ def get_dynamic_schema(db_path: str) -> Dict[str, Any]:
     Connects to a SQLite database and dynamically introspects its schema.
     Returns a dictionary in the format expected by the SchemaMetagraph.
     """
+    if not os.path.exists(db_path):
+        raise FileNotFoundError(f"Database file not found at '{db_path}'.")
+
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     schema = {'tables': {}, 'relationships': []}
@@ -171,17 +173,15 @@ class MetagraphAugmentedGenerator:
             payload = { "contents": chatHistory }
             apiKey = "AIzaSyBcb0Mf1kBaEOcz5F2fOSQUPHE64d5ssHQ"
             
-            # Use requests to make the API call
             apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={apiKey}"
             
             response = requests.post(apiUrl, headers={'Content-Type': 'application/json'}, json=payload)
-            response.raise_for_status() # Raise an exception for bad status codes
+            response.raise_for_status()
             result = response.json()
             
             if result.get('candidates') and result['candidates'][0].get('content') and result['candidates'][0]['content'].get('parts'):
                 sql_query = result['candidates'][0]['content']['parts'][0]['text']
                 
-                # Clean the SQL query from Markdown fences and whitespace
                 clean_sql_query = re.sub(r'```sql\n(.*)```', r'\1', sql_query, flags=re.DOTALL).strip()
                 
                 return clean_sql_query, list(relevant_schema_nodes)
@@ -201,7 +201,6 @@ class MetagraphAugmentedGenerator:
 app = FastAPI()
 
 # Add a health check endpoint for Render.
-# This will prevent the server from being shut down due to a failed health check.
 @app.get("/health")
 def health_check():
     """
@@ -231,8 +230,11 @@ try:
     print(northwind_schema)
     metagraph = SchemaMetagraph(northwind_schema)
     generator = MetagraphAugmentedGenerator(metagraph)
+except FileNotFoundError as e:
+    print(f"ERROR: {e}")
+    raise HTTPException(status_code=500, detail=f"Server failed to initialize: {e}")
 except Exception as e:
-    print(f"Error during schema introspection or metagraph initialization: {e}")
+    print(f"ERROR during schema introspection or metagraph initialization: {e}")
     raise HTTPException(status_code=500, detail=f"Server failed to initialize: {e}")
 
 # ==============================================================================
@@ -242,7 +244,6 @@ class QueryPayload(BaseModel):
     query: str
 
 # Mount the static files from the 'static' directory (the frontend build)
-# This serves all the CSS, JS, and image files for your frontend.
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/")

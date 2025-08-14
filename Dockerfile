@@ -2,9 +2,14 @@
 # We use a node image to build the frontend assets.
 FROM node:18-alpine AS frontend-builder
 WORKDIR /app/text-to-sql-frontend
-COPY ./text-to-sql-frontend/package.json ./text-to-sql-frontend/package-lock.json ./
+COPY ./text-to-sql-frontend/package.json ./
+COPY ./text-to-sql-frontend/package-lock.json ./
 RUN npm install
 COPY ./text-to-sql-frontend/ .
+
+# Add this line to fix the permission issue
+RUN chmod +x node_modules/.bin/vite
+
 RUN npm run build
 
 # Stage 2: Build the FastAPI backend and serve the frontend

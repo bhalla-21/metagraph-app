@@ -200,6 +200,17 @@ class MetagraphAugmentedGenerator:
 # ==============================================================================
 app = FastAPI()
 
+# Add a health check endpoint for Render.
+# This will prevent the server from being shut down due to a failed health check.
+@app.get("/health")
+def health_check():
+    """
+    A simple health check endpoint.
+    Render's health check will hit this endpoint to ensure the application is running.
+    """
+    return {"status": "ok"}
+
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -293,3 +304,4 @@ async def generate_sql_and_data_endpoint(payload: QueryPayload):
 # ==============================================================================
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
+

@@ -6,10 +6,7 @@ COPY ./text-to-sql-frontend/package.json ./
 COPY ./text-to-sql-frontend/package-lock.json ./
 RUN npm install
 COPY ./text-to-sql-frontend/ .
-
-# Add this line to fix the permission issue
 RUN chmod +x node_modules/.bin/vite
-
 RUN npm run build
 
 # Stage 2: Build the FastAPI backend and serve the frontend
@@ -33,5 +30,5 @@ COPY northwind.db .
 # Expose the port the application will run on
 EXPOSE 8000
 
-# Run the uvicorn server with the --host 0.0.0.0 flag to make it accessible
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the gunicorn server with uvicorn workers
+CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "main:app", "--bind", "0.0.0.0:8000"]

@@ -23,15 +23,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the built frontend assets from the first stage
 COPY --from=frontend-builder /app/text-to-sql-frontend/dist ./static
 
-# Copy the backend code and the database
-COPY main.py .
-COPY generator.py .
-COPY metagraph.py .
-COPY northwind.db .
+# Copy the backend code and the database with explicit paths
+# The source path is relative to the build context, and the destination is relative to the WORKDIR
+COPY ./main.py .
+COPY ./generator.py .
+COPY ./metagraph.py .
+COPY ./northwind.db .
 
 # Expose the port the application will run on
 EXPOSE 8000
 
-# This command tells Gunicorn to use the UvicornWorker, which is
-# necessary for running asynchronous FastAPI applications.
+# Command to run the application using Gunicorn and Uvicorn workers
 CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "main:app", "--bind", "0.0.0.0:8000"]

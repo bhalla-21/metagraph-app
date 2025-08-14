@@ -1,18 +1,25 @@
 # filename: main.py
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-import uvicorn
+import os
+import re
+import json
 import sqlite3
+import uvicorn
+import requests
 import networkx as nx
 from typing import Dict, List, Any, Tuple
-import requests
-import json
-import re
-import os # New import to check for file existence
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+
+# ==============================================================================
+# IMPORTANT: Use the absolute path to the database within the Docker container.
+# The Dockerfile copies northwind.db to the root of the /app directory.
+# ==============================================================================
+DB_PATH = "/app/northwind.db"
 
 # ==============================================================================
 # Part 1: Schema Representation as a Metagraph
@@ -171,8 +178,9 @@ class MetagraphAugmentedGenerator:
             chatHistory = []
             chatHistory.append({ "role": "user", "parts": [{ "text": prompt }] })
             payload = { "contents": chatHistory }
-            apiKey = "AIzaSyBcb0Mf1kBaEOcz5F2fOSQUPHE64d5ssHQ"
             
+            # API key is hardcoded as requested
+            apiKey = "AIzaSyBcb0Mf1kBaEOcz5F2fOSQUPHE64d5ssHQ"
             apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={apiKey}"
             
             response = requests.post(apiUrl, headers={'Content-Type': 'application/json'}, json=payload)
@@ -224,8 +232,10 @@ metagraph = None
 generator = None
 northwind_schema = None
 try:
-    # This is the correct dynamic schema fetching
-    northwind_schema = get_dynamic_schema('northwind.db')
+    if not os.path.exists(DB_PATH):
+        raise FileNotFoundError(f"Database file not found at: {DB_PATH}")
+    
+    northwind_schema = get_dynamic_schema(DB_PATH)
     print("Dynamically generated schema:")
     print(northwind_schema)
     metagraph = SchemaMetagraph(northwind_schema)
@@ -254,7 +264,7 @@ def serve_frontend():
     return FileResponse("static/index.html")
 
 @app.get("/get_schema")
-async def get_schema():
+async def get_schema_endpoint():
     """
     New API endpoint to return the dynamically generated database schema.
     This will be used by the frontend for visualization.
@@ -271,10 +281,11 @@ async def generate_sql_and_data_endpoint(payload: QueryPayload):
     """
     if not generator:
         raise HTTPException(status_code=500, detail="Server initialization failed. Check backend logs.")
+        
     try:
         sql_query, relevant_nodes = await generator.generate_sql(payload.query)
 
-        conn = sqlite3.connect('northwind.db')
+        conn = sqlite3.connect(DB_PATH)  # Use the absolute path here
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -305,4 +316,3 @@ async def generate_sql_and_data_endpoint(payload: QueryPayload):
 # ==============================================================================
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
-

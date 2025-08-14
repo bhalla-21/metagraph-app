@@ -1,28 +1,37 @@
 # filename: Dockerfile
 
-# Use the official Python image as a base
-FROM python:3.9-slim
+# Stage 1: Build the React frontend
+# We use a node image to build the frontend assets.
+FROM node:18-alpine AS frontend-builder
+WORKDIR /app/text-to-sql-frontend
+COPY ./text-to-sql-frontend/package.json ./
+COPY ./text-to-sql-frontend/package-lock.json ./
+RUN npm install
+COPY ./text-to-sql-frontend/ .
+RUN chmod +x node_modules/.bin/vite
+RUN npm run build
 
-# Set the working directory in the container
+# Stage 2: Build the FastAPI backend and serve the frontend
+# We use a Python image to run the backend and serve the static files.
+FROM python:3.9-slim
 WORKDIR /app
 
-# Copy the requirements file into the container
+# Copy the Python dependencies and install them
 COPY requirements.txt .
-
-# Install the dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the application code into the container
+# Copy the built frontend assets from the first stage
+COPY --from=frontend-builder /app/text-to-sql-frontend/dist ./static
+
+# Copy the backend code and the database
 COPY main.py .
-
-# Copy the frontend files from the correct path
-COPY text-to-sql-frontend/src/ ./static/
-
-# Copy the SQLite database file into the container
+COPY generator.py .
+COPY metagraph.py .
 COPY northwind.db .
 
-# Expose the port the app runs on
+# Expose the port the application will run on
 EXPOSE 8000
 
-# Command to run the application using Gunicorn
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8000", "main:app"]
+# This command tells Gunicorn to use the UvicornWorker, which is
+# necessary for running asynchronous FastAPI applications.
+CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "main:app", "--bind", "0.0.0.0:8000"]

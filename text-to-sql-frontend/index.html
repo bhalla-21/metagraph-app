@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Metagraph Query Interface</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7fafc;
+        }
+        .container {
+            max-width: 1200px;
+        }
+        .card {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            border-radius: 0.5rem;
+            background-color: #ffffff;
+        }
+        .table-container {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .node-table {
+            fill: #3498db;
+            cursor: pointer;
+            transition: all 0.3s ease-in-out;
+        }
+        .node-column {
+            fill: #2ecc71;
+            cursor: pointer;
+            transition: all 0.3s ease-in-out;
+        }
+        .link {
+            stroke: #95a5a6;
+            stroke-width: 1.5;
+            transition: all 0.3s ease-in-out;
+        }
+        .highlighted-node {
+            fill: #e74c3c;
+            stroke: #c0392b;
+            stroke-width: 3;
+        }
+        .highlighted-link {
+            stroke: #e74c3c;
+            stroke-width: 3;
+            stroke-dasharray: 5, 5;
+        }
+        .table-label, .column-label {
+            font-size: 10px;
+            font-weight: bold;
+            fill: #333;
+            pointer-events: none;
+            transition: all 0.3s ease-in-out;
+        }
+        .highlighted-label {
+            font-size: 12px;
+            fill: #c0392b;
+        }
+        .tooltip {
+            position: absolute;
+            background-color: #333;
+            color: #fff;
+            padding: 8px;
+            border-radius: 4px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+            white-space: nowrap;
+            font-size: 12px;
+        }
+        #metagraph-visualization {
+            border: 1px solid #e2e8f0;
+            border-radius: 0.5rem;
+            width: 100%;
+            height: 500px;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+    <div class="container mx-auto p-4 md:p-8">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <!-- Left Side: Query Interface and Results -->
+            <div class="flex flex-col gap-8">
+                <div class="card p-6">
+                    <h2 class="text-2xl font-bold mb-4 text-gray-800">Text-to-SQL Query</h2>
+                    <form id="queryForm" class="flex flex-col space-y-4">
+                        <textarea id="queryInput" class="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" rows="3" placeholder="e.g., 'What are the names of all employees?'"></textarea>
+                        <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-colors">Generate SQL & Execute</button>
+                    </form>
+                </div>
+
+                <div class="card p-6">
+                    <h3 class="text-xl font-bold mb-4 text-gray-800">Results</h3>
+                    <div id="resultsOutput">
+                        <p class="text-gray-500">Submit a query to see results.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Side: Metagraph Visualization -->
+            <div class="flex flex-col gap-8">
+                <div class="card p-6 flex flex-col items-center justify-center">
+                    <h3 class="text-2xl font-bold mb-4 text-gray-800">Metagraph Visualization</h3>
+                    <div id="metagraph-visualization-container" class="w-full">
+                        <svg id="metagraph-visualization"></svg>
+                    </div>
+                    <div id="tooltip" class="tooltip"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', async () => {
+            const API_URL = "http://localhost:8000";
+            const queryForm = document.getElementById('queryForm');
+            const queryInput = document.getElementById('queryInput');
+            const resultsOutput = document.getElementById('resultsOutput');
+            const svg = d3.select("#metagraph-visualization");
+            const width = document.getElementById('metagraph-visualization-container').offsetWidth;
+            const height = 500;
+
+            const tooltip = d3.select("#tooltip");
+
+            let currentNodes = [];
+            let currentLinks = [];
+            let simulation;
+            let link, node, labels;
+
+            // Function to fetch the schema from the backend
+            async function fetchSchema() {
+                try {
+                    const response = await fetch(`${API_URL}/get_schema`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return await response.json();
+                } catch (error) {
+                    console.error("Could not fetch schema:", error);
+                    resultsOutput.innerHTML = `<p class="text-red-500">Error fetching schema: ${error.message}. Is the backend running?</p>`;
+                    return null;
+                }
+            }
+
+            // Function to draw the metagraph using D3.js
+            function drawMetagraph(schema) {
+                const nodes = [];
+                const links = [];
+
+                // Helper to create a unique ID for a node
+                const getNodeID = (table, col) => col ? `${table}.${col}` : table;
+                
+                // Add table and column nodes
+                for (const tableName in schema.tables) {
+                    nodes.push({ id: getNodeID(tableName), group: tableName, type: 'table', name: tableName });
+                    schema.tables[tableName].columns.forEach(colName => {
+                        const nodeId = getNodeID(tableName, colName);
+                        nodes.push({ id: nodeId, group: tableName, type: 'column', name: colName });
+                        // Add a link from column to its table
+                        links.push({ source: nodeId, target: getNodeID(tableName) });
+                    });
+                }
+
+                // Add foreign key links
+                schema.relationships.forEach(rel => {
+                    links.push({
+                        source: getNodeID(rel.from_table, rel.from_col),
+                        target: getNodeID(rel.to_table, rel.to_col)
+                    });
+                });
+
+                currentNodes = nodes;
+                currentLinks = links;
+
+                // Create a D3 force simulation
+                simulation = d3.forceSimulation(nodes)
+                    .force("link", d3.forceLink(links).id(d => d.id).distance(100))
+                    .force("charge", d3.forceManyBody().strength(-300))
+                    .force("center", d3.forceCenter(width / 2, height / 2));
+
+                // Clear previous visualization
+                svg.selectAll("*").remove();
+
+                const g = svg.append("g");
+
+                // Draw links
+                link = g.append("g")
+                    .attr("stroke", "#999")
+                    .attr("stroke-opacity", 0.6)
+                    .selectAll("line")
+                    .data(links)
+                    .join("line")
+                    .attr("class", "link")
+                    .attr("stroke-width", 1.5);
+                
+                // Draw nodes and labels
+                node = g.append("g")
+                    .attr("stroke", "#fff")
+                    .attr("stroke-width", 1.5)
+                    .selectAll("circle")
+                    .data(nodes)
+                    .join("circle")
+                    .attr("r", d => d.type === 'table' ? 12 : 8)
+                    .attr("class", d => d.type === 'table' ? "node-table" : "node-column")
+                    .call(drag(simulation))
+                    .on("mouseover", (event, d) => {
+                        tooltip.style("opacity", 1)
+                            .html(`<strong>${d.type.toUpperCase()}:</strong> ${d.name}`);
+                    })
+                    .on("mousemove", (event) => {
+                        tooltip.style("left", `${event.pageX + 15}px`)
+                               .style("top", `${event.pageY - 28}px`);
+                    })
+                    .on("mouseout", () => {
+                        tooltip.style("opacity", 0);
+                    });
+
+                // Draw labels
+                labels = g.append("g")
+                    .selectAll("text")
+                    .data(nodes)
+                    .join("text")
+                    .attr("x", d => d.type === 'table' ? 15 : 10)
+                    .attr("y", d => d.type === 'table' ? 5 : 3)
+                    .text(d => d.name)
+                    .attr("class", d => d.type === 'table' ? "table-label" : "column-label");
+
+                // Update positions on each tick of the simulation
+                simulation.on("tick", () => {
+                    link.attr("x1", d => d.source.x)
+                        .attr("y1", d => d.source.y)
+                        .attr("x2", d => d.target.x)
+                        .attr("y2", d => d.target.y);
+                    
+                    node.attr("cx", d => d.x)
+                        .attr("cy", d => d.y);
+                    
+                    labels.attr("transform", d => `translate(${d.x}, ${d.y})`);
+                });
+
+                // Zoom and pan functionality
+                const zoom = d3.zoom()
+                    .scaleExtent([0.1, 4])
+                    .on('zoom', (event) => {
+                        g.attr('transform', event.transform);
+                    });
+                
+                svg.call(zoom);
+            }
+
+            // Drag functionality for nodes
+            function drag(simulation) {
+                function dragstarted(event, d) {
+                    if (!event.active) simulation.alphaTarget(0.3).restart();
+                    d.fx = d.x;
+                    d.fy = d.y;
+                }
+
+                function dragged(event, d) {
+                    d.fx = event.x;
+                    d.fy = event.y;
+                }
+
+                function dragended(event, d) {
+                    if (!event.active) simulation.alphaTarget(0);
+                    d.fx = null;
+                    d.fy = null;
+                }
+
+                return d3.drag()
+                    .on("start", dragstarted)
+                    .on("drag", dragged)
+                    .on("end", dragended);
+            }
+
+            // Function to highlight the path based on relevant nodes
+            function highlightPath(relevantNodes) {
+                // First, remove all existing highlights
+                d3.selectAll(".highlighted-node").classed("highlighted-node", false);
+                d3.selectAll(".highlighted-link").classed("highlighted-link", false);
+                d3.selectAll(".highlighted-label").classed("highlighted-label", false);
+                d3.selectAll(".node-table, .node-column").attr("r", d => d.type === 'table' ? 12 : 8);
+
+                const relevantNodeSet = new Set(relevantNodes);
+
+                // Highlight nodes
+                node.filter(d => relevantNodeSet.has(d.id))
+                    .classed("highlighted-node", true)
+                    .attr("r", d => d.type === 'table' ? 15 : 10);
+                
+                // Highlight labels
+                labels.filter(d => relevantNodeSet.has(d.id))
+                    .classed("highlighted-label", true);
+
+                // Highlight links if both source and target are in the relevant set
+                link.filter(d => relevantNodeSet.has(d.source.id) && relevantNodeSet.has(d.target.id))
+                    .classed("highlighted-link", true);
+            }
+
+            // Handle form submission
+            queryForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                const query = queryInput.value.trim();
+                if (!query) {
+                    resultsOutput.innerHTML = `<p class="text-red-500">Please enter a query.</p>`;
+                    return;
+                }
+
+                resultsOutput.innerHTML = `<p class="text-gray-500">Generating SQL and fetching data...</p>`;
+                highlightPath([]); // Clear any previous highlights
+
+                try {
+                    const response = await fetch(`${API_URL}/generate_sql_and_data`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ query: query })
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+                    }
+
+                    const data = await response.json();
+                    displayResults(data);
+                    if (data.relevant_nodes) {
+                        highlightPath(data.relevant_nodes);
+                    }
+                } catch (error) {
+                    console.error("Error:", error);
+                    resultsOutput.innerHTML = `<p class="text-red-500">Error: ${error.message}.</p>`;
+                }
+            });
+
+            // Display results in a table
+            function displayResults(data) {
+                let html = `
+                    <div class="mb-4">
+                        <strong class="text-gray-700">SQL Query:</strong>
+                        <pre class="bg-gray-200 p-2 rounded-lg mt-2 overflow-auto text-sm">${data.sql_query}</pre>
+                    </div>
+                `;
+
+                if (data.data && data.data.length > 0) {
+                    const headers = Object.keys(data.data[0]);
+                    html += `
+                        <div class="table-container card p-4">
+                            <table class="w-full text-left table-auto">
+                                <thead class="bg-gray-50 sticky top-0">
+                                    <tr>
+                                        ${headers.map(header => `<th class="px-4 py-2 border-b-2 border-gray-200 text-sm font-semibold text-gray-600">${header}</th>`).join('')}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${data.data.map(row => `
+                                        <tr class="hover:bg-gray-100">
+                                            ${headers.map(header => `<td class="px-4 py-2 border-b border-gray-200 text-sm text-gray-800">${row[header] !== null ? row[header] : 'null'}</td>`).join('')}
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    `;
+                } else {
+                    html += `<p class="text-gray-500">No results found.</p>`;
+                }
+                resultsOutput.innerHTML = html;
+            }
+
+            // Initial load: Fetch schema and draw the metagraph
+            const schema = await fetchSchema();
+            if (schema) {
+                drawMetagraph(schema);
+            }
+        });
+    </script>
+</body>
+</html>

@@ -3,7 +3,6 @@
 FROM node:18-alpine AS frontend-builder
 
 # Set the working directory for the frontend code
-# This is the directory where all frontend-related commands will run
 WORKDIR /app/text-to-sql-frontend
 
 # Copy package.json and package-lock.json first to leverage Docker's layer caching.
@@ -15,6 +14,11 @@ RUN npm install
 
 # Copy the rest of the frontend source code
 COPY text-to-sql-frontend/ ./
+
+# Fix the permissions for the vite executable
+# This is a critical step to solve the "Permission denied" error.
+# The `chmod` command makes the vite executable runnable by the user.
+RUN chmod +x ./node_modules/.bin/vite
 
 # Build the optimized production assets.
 # This runs the 'build' script defined in your package.json

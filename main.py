@@ -16,10 +16,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 # ==============================================================================
-# IMPORTANT: Use a relative path from the working directory, which is `/app`.
+# IMPORTANT: Use the absolute path to the database within the Docker container.
 # The Dockerfile copies northwind.db to the root of the /app directory.
 # ==============================================================================
-DB_PATH = "northwind.db"
+DB_PATH = "/app/northwind.db"
 
 # ==============================================================================
 # Part 1: Schema Representation as a Metagraph
@@ -74,12 +74,8 @@ def get_dynamic_schema(db_path: str) -> Dict[str, Any]:
     Connects to a SQLite database and dynamically introspects its schema.
     Returns a dictionary in the format expected by the SchemaMetagraph.
     """
-    # Added a check to confirm the file exists before attempting to connect
     if not os.path.exists(db_path):
-        print(f"DEBUG: Database file not found at '{os.path.abspath(db_path)}'.")
         raise FileNotFoundError(f"Database file not found at '{db_path}'.")
-    
-    print(f"DEBUG: Found database file at '{os.path.abspath(db_path)}'.")
 
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
@@ -289,7 +285,7 @@ async def generate_sql_and_data_endpoint(payload: QueryPayload):
     try:
         sql_query, relevant_nodes = await generator.generate_sql(payload.query)
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH)  # Use the absolute path here
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         

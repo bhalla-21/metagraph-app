@@ -1,19 +1,76 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, Loader2 } from 'lucide-react';
 
+// The API base URL is now an empty string. This tells the frontend
+// to make API calls to the same server it was loaded from,
+// which is your Python backend.
+const API_BASE_URL = '';
+
 const App = () => {
   // State for user input and API responses
   const [query, setQuery] = useState('');
   const [sqlQuery, setSqlQuery] = useState('');
   const [data, setData] = useState([]);
-  const [graphDetails, setGraphDetails] = useState(null);
+  const [relevantNodes, setRelevantNodes] = useState([]);
+  const [schemaData, setSchemaData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [isVisLoaded, setIsVisLoaded] = useState(false);
 
-  // Ref for the canvas element
-  const canvasRef = useRef(null);
+  // Ref for the visualization container
+  const visRef = useRef(null);
+  const visNetworkRef = useRef(null);
 
-  // Function to handle form submission and API call
+  // ==============================================================================
+  // Part 1: Dynamically load vis-network from CDN
+  // ==============================================================================
+  useEffect(() => {
+    // Dynamically load the vis-network library from a CDN
+    const loadVisJs = () => {
+      if (window.vis && window.vis.Network) {
+        setIsVisLoaded(true);
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = 'https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.js';
+      script.onload = () => {
+        setIsVisLoaded(true);
+        console.log("Vis.js loaded successfully.");
+      };
+      script.onerror = () => {
+        console.error("Failed to load Vis.js");
+      };
+      document.head.appendChild(script);
+    };
+    loadVisJs();
+  }, []);
+
+  // ==============================================================================
+  // Part 2: Fetching the initial schema on component mount
+  // ==============================================================================
+  useEffect(() => {
+    if (!isVisLoaded) return;
+
+    const fetchSchema = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/get_schema`);
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const schema = await response.json();
+        console.log("Schema fetched:", schema);
+        setSchemaData(schema);
+      } catch (err) {
+        console.error("Error fetching schema:", err);
+        setError("Error fetching schema. Please ensure the backend is running.");
+      }
+    };
+    fetchSchema();
+  }, [isVisLoaded]); // Fetch schema only after Vis.js is loaded
+
+  // ==============================================================================
+  // Part 3: Handling query submission
+  // ==============================================================================
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!query) return;
@@ -22,28 +79,25 @@ const App = () => {
     setError(null);
     setSqlQuery('');
     setData([]);
-    setGraphDetails(null);
+    setRelevantNodes([]);
 
     try {
-      // Make a POST request to the backend API
-      const response = await fetch('/generate_sql_and_data', {
+      const response = await fetch(`${API_BASE_URL}/generate_sql_and_data`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query }),
       });
 
+      const result = await response.json();
+
       if (!response.ok) {
-        throw new Error('Failed to fetch data from the server.');
+        throw new Error(result.detail || 'Failed to fetch data from the server.');
       }
 
-      // Parse and set the response data
-      const result = await response.json();
       console.log('Successfully received data from backend:', result);
       setSqlQuery(result.sql_query);
       setData(result.data);
-      setGraphDetails(result.graph_details);
+      setRelevantNodes(result.relevant_nodes);
 
     } catch (err) {
       console.error('Frontend Fetch Error:', err);
@@ -53,146 +107,90 @@ const App = () => {
     }
   };
 
-  // useEffect hook to handle the canvas visualization
+  // ==============================================================================
+  // Part 4: Vis.js Visualization Effect
+  // ==============================================================================
   useEffect(() => {
-    console.log('useEffect triggered. Current graphDetails:', graphDetails);
-    // Only run if graph details are available and there are nodes to draw
-    if (!graphDetails || !canvasRef.current || graphDetails.nodes.length === 0) {
-      console.log('Skipping canvas drawing due to missing graph data.');
+    if (!isVisLoaded || !schemaData || !visRef.current) {
       return;
     }
-    
-    console.log('Drawing metagraph with data:', graphDetails);
+  
+    const nodes = [];
+    const edges = [];
+  
+    // Add nodes and edges for the full schema
+    for (const tableName in schemaData.tables) {
+      nodes.push({ id: tableName, label: tableName, group: 'tables' });
+      schemaData.tables[tableName].columns.forEach(colName => {
+        const colId = `${tableName}.${colName}`;
+        nodes.push({ id: colId, label: colName, group: 'columns' });
+        edges.push({ from: colId, to: tableName, arrows: 'to' });
+      });
+    }
+  
+    // Add relationship edges (foreign keys)
+    schemaData.relationships.forEach(rel => {
+      edges.push({
+        from: `${rel.from_table}.${rel.from_col}`,
+        to: `${rel.to_table}.${rel.to_col}`,
+        arrows: 'to',
+        color: { color: 'red' },
+        dashes: true,
+        label: 'FK'
+      });
+    });
+  
+    // Highlight relevant nodes based on the query result
+    nodes.forEach(node => {
+      if (relevantNodes.includes(node.id)) {
+        node.color = { background: '#ADD8E6', border: '#4682B4' };
+        node.font = { multi: 'html', bold: true };
+      } else {
+        node.color = { background: '#EAEAEA', border: '#999999' };
+        node.font = { multi: false, bold: false };
+      }
+    });
 
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    const dpr = window.devicePixelRatio || 1;
-    let animationFrameId;
-
-    // Set canvas size for high-DPI displays and responsiveness
-    const setCanvasSize = () => {
-      const parent = canvas.parentElement;
-      canvas.width = parent.clientWidth * dpr;
-      canvas.height = 400 * dpr;
-      canvas.style.width = `${parent.clientWidth}px`;
-      canvas.style.height = `400px`;
+    const visData = { nodes: new window.vis.DataSet(nodes), edges: new window.vis.DataSet(edges) };
+    const options = {
+      nodes: {
+        shape: 'box',
+        font: { multi: 'html', size: 12 },
+        color: { background: '#EAEAEA', border: '#999999' }
+      },
+      edges: {
+        arrows: 'to',
+        color: 'gray',
+        smooth: { type: 'cubicBezier' }
+      },
+      layout: {
+        hierarchical: {
+          direction: 'UD',
+          sortMethod: 'hubsize'
+        }
+      },
+      physics: {
+        enabled: true,
+        solver: 'barnesHut',
+        barnesHut: {
+          gravitationalConstant: -2000,
+          springConstant: 0.05
+        }
+      }
     };
+  
+    if (visNetworkRef.current) {
+        visNetworkRef.current.destroy();
+    }
+    visNetworkRef.current = new window.vis.Network(visRef.current, visData, options);
 
-    setCanvasSize();
-    window.addEventListener('resize', setCanvasSize);
-
-    // Initialize force-directed graph simulation variables
-    const nodes = graphDetails.nodes.map(node => ({
-      ...node,
-      // Random initial position
-      x: Math.random() * canvas.width,
-      y: Math.random() * canvas.height,
-      vx: 0,
-      vy: 0,
-      // Node size and color based on type
-      radius: node.attributes.type === 'table' ? 12 : 8,
-      color: node.attributes.type === 'table' ? '#4f46e5' : '#10b981',
-      label: node.name,
-    }));
-
-    const edges = graphDetails.edges;
-    
-    // Main animation loop
-    const animate = () => {
-      // Clear canvas for a fresh frame
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#e5e7eb'; // Gray-200 background color
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      // Apply forces for simulation
-      // Repulsion force between nodes
-      for (let i = 0; i < nodes.length; i++) {
-        for (let j = i + 1; j < nodes.length; j++) {
-          const dx = nodes[j].x - nodes[i].x;
-          const dy = nodes[j].y - nodes[i].y;
-          const distSq = dx * dx + dy * dy;
-          if (distSq < 20000) { // Repulsion distance
-            const dist = Math.sqrt(distSq);
-            const force = 1000 / dist; // Simple repulsion formula
-            nodes[i].vx -= force * (dx / dist);
-            nodes[i].vy -= force * (dy / dist);
-            nodes[j].vx += force * (dx / dist);
-            nodes[j].vy += force * (dy / dist);
-          }
-        }
-      }
-
-      // Attraction force for edges
-      for (const edge of edges) {
-        const source = nodes.find(n => n.name === edge.from);
-        const target = nodes.find(n => n.name === edge.to);
-        if (source && target) {
-          const dx = target.x - source.x;
-          const dy = target.y - source.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          const force = dist * 0.01; // Simple spring force
-          source.vx += force * (dx / dist);
-          source.vy += force * (dy / dist);
-          target.vx -= force * (dx / dist);
-          target.vy -= force * (dy / dist);
-        }
-      }
-
-      // Update positions and apply damping/boundary checks
-      for (const node of nodes) {
-        node.x += node.vx;
-        node.y += node.vy;
-        node.vx *= 0.95; // Damping
-        node.vy *= 0.95;
-        
-        // Boundary check to keep nodes within canvas
-        if (node.x < node.radius) node.x = node.radius;
-        if (node.x > canvas.width - node.radius) node.x = canvas.width - node.radius;
-        if (node.y < node.radius) node.y = node.radius;
-        if (node.y > canvas.height - node.radius) node.y = canvas.height - node.radius;
-      }
-      
-      // Draw edges
-      ctx.beginPath();
-      for (const edge of edges) {
-        const source = nodes.find(n => n.name === edge.from);
-        const target = nodes.find(n => n.name === edge.to);
-        if (source && target) {
-          ctx.moveTo(source.x, source.y);
-          ctx.lineTo(target.x, target.y);
-        }
-      }
-      ctx.strokeStyle = '#9ca3af';
-      ctx.stroke();
-
-      // Draw nodes and labels
-      for (const node of nodes) {
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, node.radius, 0, 2 * Math.PI);
-        ctx.fillStyle = node.color;
-        ctx.fill();
-        ctx.strokeStyle = '#ffffff';
-        ctx.stroke();
-
-        ctx.font = `${12 * dpr}px sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#000000';
-        ctx.fillText(node.label, node.x, node.y + node.radius + 12 * dpr);
-      }
-      
-      animationFrameId = requestAnimationFrame(animate);
-    };
-
-    // Start the animation loop
-    animate();
-
-    // Cleanup function to remove event listener and cancel animation frame
+    // Clean up the network instance on component unmount
     return () => {
-      window.removeEventListener('resize', setCanvasSize);
-      cancelAnimationFrame(animationFrameId);
+      if (visNetworkRef.current) {
+          visNetworkRef.current.destroy();
+      }
     };
-  }, [graphDetails]); // The effect depends on graphDetails, so it re-runs when new data arrives
+  }, [isVisLoaded, schemaData, relevantNodes]); // Rerun when schema or relevantNodes change
 
   return (
     <div className="min-h-screen bg-gray-100 p-8 font-sans antialiased text-gray-800 flex flex-col items-center">
@@ -206,7 +204,7 @@ const App = () => {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="flex-1 px-4 py-3 text-lg border-2 border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500 transition-colors"
-            placeholder="e.g., 'Which employee is the manager of 'Steven Buchanan'?'"
+            placeholder="e.g., 'What are the names of all employees?'"
             disabled={isLoading}
           />
           <button
@@ -279,30 +277,13 @@ const App = () => {
         <div className="space-y-6">
           <div className="bg-gray-50 p-6 rounded-lg shadow-inner">
             <h2 className="text-2xl font-semibold text-gray-700 mb-4">Metagraph Visualization:</h2>
-            {graphDetails && graphDetails.nodes.length > 0 ? (
-              <>
-                {/* Legend for the graph */}
-                <div className="flex justify-center items-center mb-4">
-                  <div className="flex items-center mr-6">
-                    <div className="w-4 h-4 rounded-full bg-indigo-600 mr-2 border border-gray-400"></div>
-                    <span className="text-gray-700">Table Node</span>
-                  </div>
-                  <div className="flex items-center">
-                    <div className="w-4 h-4 rounded-full bg-emerald-500 mr-2 border border-gray-400"></div>
-                    <span className="text-gray-700">Column Node</span>
-                  </div>
-                </div>
-                {/* Canvas container */}
-                <div className="w-full h-96 bg-gray-200 rounded-lg shadow-md relative overflow-hidden">
-                  <canvas ref={canvasRef} className="absolute inset-0"></canvas>
-                </div>
-              </>
-            ) : (
-              // Display a message when no graph data is available
-              <div className="w-full h-96 bg-gray-200 rounded-lg shadow-md flex items-center justify-center">
-                <p className="text-gray-500">Submit a query to see the metagraph visualization.</p>
-              </div>
-            )}
+            <div className="w-full h-96 bg-gray-200 rounded-lg shadow-md flex items-center justify-center">
+              {schemaData ? (
+                 <div ref={visRef} className="w-full h-full rounded-lg"></div>
+              ) : (
+                <p className="text-gray-500">Loading schema...</p>
+              )}
+            </div>
           </div>
         </div>
       </div>

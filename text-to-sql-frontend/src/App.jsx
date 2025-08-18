@@ -4,7 +4,7 @@ import { Search, Loader2 } from 'lucide-react';
 // The API base URL is now an empty string. This tells the frontend
 // to make API calls to the same server it was loaded from,
 // which is your Python backend.
-const API_BASE_URL = '';
+const API_BASE_URL = 'https://metagraph-app.onrender.com';
 
 const App = () => {
   // State for user input and API responses
